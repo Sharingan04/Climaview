@@ -11,13 +11,14 @@ def load_forecast_models():
     Load or create machine learning models for weather forecasting.
     
     Returns:
-        tuple: (temp_model, rain_model) - Models for temperature and rainfall prediction
+        tuple: (temp_model, rain_model, humidity_model) - Models for temperature, rainfall, and humidity prediction
     """
     # Create models
     temp_model = RandomForestRegressor(n_estimators=50, random_state=42)
     rain_model = RandomForestRegressor(n_estimators=50, random_state=42)
+    humidity_model = RandomForestRegressor(n_estimators=50, random_state=42)
     
-    return temp_model, rain_model
+    return temp_model, rain_model, humidity_model
 
 def preprocess_data_for_prediction(county_data):
     """
@@ -32,11 +33,23 @@ def preprocess_data_for_prediction(county_data):
     # Create a copy to avoid modifying the original data
     data = county_data.copy()
     
+    # Check if humidity data is available
+    has_humidity = 'rhum' in data.columns
+    
     # Group by day to get daily values
-    daily_data = data.groupby([data['date'].dt.date, 'county']).agg({
-        'temp': 'mean',
-        'rain': 'sum'
-    }).reset_index()
+    if has_humidity:
+        daily_data = data.groupby([data['date'].dt.date, 'county']).agg({
+            'temp': 'mean',
+            'rain': 'sum',
+            'rhum': 'mean'
+        }).reset_index()
+    else:
+        daily_data = data.groupby([data['date'].dt.date, 'county']).agg({
+            'temp': 'mean',
+            'rain': 'sum'
+        }).reset_index()
+        # Add a default humidity column if not present
+        daily_data['rhum'] = 80  # Default average relative humidity
     
     # Convert 'date' column from object to datetime
     daily_data['date'] = pd.to_datetime(daily_data['date'])
@@ -66,16 +79,25 @@ def preprocess_data_for_prediction(county_data):
     daily_data['rain_lag3'] = daily_data['rain'].shift(3)
     daily_data['rain_lag7'] = daily_data['rain'].shift(7)
     
+    # Add humidity lag features
+    daily_data['rhum_lag1'] = daily_data['rhum'].shift(1)
+    daily_data['rhum_lag2'] = daily_data['rhum'].shift(2)
+    daily_data['rhum_lag3'] = daily_data['rhum'].shift(3)
+    daily_data['rhum_lag7'] = daily_data['rhum'].shift(7)
+    
     # Calculate rolling averages
     daily_data['temp_rolling_mean_3'] = daily_data['temp'].rolling(window=3).mean()
     daily_data['temp_rolling_mean_7'] = daily_data['temp'].rolling(window=7).mean()
     daily_data['rain_rolling_mean_3'] = daily_data['rain'].rolling(window=3).mean()
     daily_data['rain_rolling_mean_7'] = daily_data['rain'].rolling(window=7).mean()
+    daily_data['rhum_rolling_mean_3'] = daily_data['rhum'].rolling(window=3).mean()
+    daily_data['rhum_rolling_mean_7'] = daily_data['rhum'].rolling(window=7).mean()
     
     # Create target variables (future values)
     for i in range(1, 6):
         daily_data[f'temp_future_{i}'] = daily_data['temp'].shift(-i)
         daily_data[f'rain_future_{i}'] = daily_data['rain'].shift(-i)
+        daily_data[f'rhum_future_{i}'] = daily_data['rhum'].shift(-i)
     
     # Fill missing values
     daily_data = daily_data.fillna(method='bfill').fillna(method='ffill')
@@ -101,12 +123,15 @@ def fit_models(data):
         data (pandas.DataFrame): Processed historical weather data
         
     Returns:
-        tuple: (temp_model, rain_model) - Fitted models
+        tuple: (temp_model, rain_model, humidity_model) - Fitted models
     """
     # Load models
-    temp_model, rain_model = load_forecast_models()
+    temp_model, rain_model, humidity_model = load_forecast_models()
     
     try:
+        # Check if humidity data is available
+        has_humidity = 'rhum' in data.columns
+        
         # Features for prediction
         features = [
             'month_sin', 'month_cos', 'day_sin', 'day_cos',
@@ -117,15 +142,27 @@ def fit_models(data):
             'rain_rolling_mean_3', 'rain_rolling_mean_7'
         ]
         
+        # Add humidity features if available
+        if has_humidity:
+            humidity_features = [
+                'rhum',
+                'rhum_lag1', 'rhum_lag2', 'rhum_lag3', 'rhum_lag7',
+                'rhum_rolling_mean_3', 'rhum_rolling_mean_7'
+            ]
+            features.extend(humidity_features)
+        
         # Ensure all required columns exist
-        for col in features:
+        for col in list(features):  # Create a copy of the list for iteration
             if col not in data.columns:
                 print(f"Column {col} not found in data, skipping...")
                 features.remove(col)
         
         # Train data
-        train_data = data.dropna(subset=[f'temp_future_{i}' for i in range(1, 6)] + 
-                                 [f'rain_future_{i}' for i in range(1, 6)])
+        train_subsets = [f'temp_future_{i}' for i in range(1, 6)] + [f'rain_future_{i}' for i in range(1, 6)]
+        if has_humidity:
+            train_subsets.extend([f'rhum_future_{i}' for i in range(1, 6)])
+            
+        train_data = data.dropna(subset=train_subsets)
         
         if len(train_data) > 10:  # Ensure we have enough data
             # Get feature data
@@ -143,17 +180,24 @@ def fit_models(data):
             # Train rainfall model
             rain_model.fit(X, y_rain)
             
+            # Train humidity model if data is available
+            if has_humidity:
+                y_humidity = train_data[[f'rhum_future_{i}' for i in range(1, 6)]].values
+                humidity_model.fit(X, y_humidity)
+            
             # Print feature importance
             temp_importance = get_feature_importance(temp_model, features)
             rain_importance = get_feature_importance(rain_model, features)
             
-            return temp_model, rain_model
+            return temp_model, rain_model, humidity_model
         else:
             print(f"Not enough training data: {len(train_data)} rows")
-            return None, None
+            return None, None, None
     except Exception as e:
         print(f"Error in fit_models: {e}")
-        return None, None
+        import traceback
+        traceback.print_exc()
+        return None, None, None
 
 def predict_county_weather(county_data, forecast_days=7):
     """
@@ -164,7 +208,7 @@ def predict_county_weather(county_data, forecast_days=7):
         forecast_days (int): Number of days to forecast
         
     Returns:
-        pandas.DataFrame: Forecast data with temperature and rainfall predictions
+        pandas.DataFrame: Forecast data with temperature, rainfall, and humidity predictions
     """
     try:
         # Get county name
@@ -183,8 +227,11 @@ def predict_county_weather(county_data, forecast_days=7):
             print("Processed data is empty")
             return None
         
+        # Check if humidity data is available
+        has_humidity = 'rhum' in processed_data.columns
+        
         # Fit models
-        temp_model, rain_model = fit_models(processed_data)
+        temp_model, rain_model, humidity_model = fit_models(processed_data)
         
         if temp_model is None or rain_model is None:
             print("Failed to train models")
@@ -213,11 +260,20 @@ def predict_county_weather(county_data, forecast_days=7):
             'rain_rolling_mean_3', 'rain_rolling_mean_7'
         ]
         
+        # Add humidity features if available
+        if has_humidity:
+            humidity_features = [
+                'rhum',
+                'rhum_lag1', 'rhum_lag2', 'rhum_lag3', 'rhum_lag7',
+                'rhum_rolling_mean_3', 'rhum_rolling_mean_7'
+            ]
+            features.extend(humidity_features)
+        
         # Ensure all required columns exist
-        for col in features:
+        for col in list(features):  # Create a copy of the list for iteration
             if col not in latest_data.columns:
                 print(f"Column {col} not found in latest data")
-                return None
+                features.remove(col)
         
         # Make predictions
         X = latest_data[features].values
@@ -231,13 +287,26 @@ def predict_county_weather(county_data, forecast_days=7):
             'rain': rain_preds
         })
         
+        # Add humidity predictions if available
+        if has_humidity and humidity_model is not None:
+            humidity_preds = humidity_model.predict(X)[0][:forecast_days]
+            forecast_df['humidity'] = humidity_preds
+        else:
+            # Default humidity values based on temperature and rain if model not available
+            forecast_df['humidity'] = 70 + (forecast_df['rain'] * 3) - (forecast_df['temp'] * 0.5)
+            
         # Add a small random variation to make the forecast look more natural
         forecast_df['temp'] = forecast_df['temp'] + np.random.normal(0, 0.2, len(forecast_df))
         forecast_df['rain'] = np.maximum(0, forecast_df['rain'] + np.random.exponential(0.1, len(forecast_df)))
+        forecast_df['humidity'] = np.clip(
+            forecast_df['humidity'] + np.random.normal(0, 1.5, len(forecast_df)),
+            30, 100  # Humidity must be between 30% and 100%
+        )
         
         # Round values
         forecast_df['temp'] = forecast_df['temp'].round(1)
         forecast_df['rain'] = forecast_df['rain'].round(2)
+        forecast_df['humidity'] = forecast_df['humidity'].round(0).astype(int)
         
         # Add confidence intervals for temperature (±1.5°C)
         forecast_df['temp_upper'] = forecast_df['temp'] + 1.5
