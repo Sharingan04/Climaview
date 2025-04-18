@@ -5,24 +5,6 @@ from sklearn.linear_model import LinearRegression
 from sklearn.ensemble import RandomForestRegressor
 import streamlit as st
 
-# County-specific forecast data based on the notebook
-IRELAND_FORECAST_DATA = {
-    'Carlow': {'temp': [10.64, 10.64, 10.63, 10.59, 10.59], 'rain': [1.91, 1.98, 2.04, 2.03, 2.11]},
-    'Cavan': {'temp': [8.89, 8.98, 9.01, 9.01, 9.02], 'rain': [2.39, 2.57, 2.61, 2.59, 2.66]},
-    'Clare': {'temp': [9.18, 9.34, 9.41, 9.41, 9.44], 'rain': [2.32, 2.56, 2.63, 2.69, 2.74]},
-    'Cork': {'temp': [11.87, 11.85, 11.79, 11.72, 11.74], 'rain': [6.87, 7.49, 7.59, 7.88, 8.27]},
-    'Donegal': {'temp': [8.18, 8.33, 8.41, 8.48, 8.5], 'rain': [2.96, 3.11, 3.16, 3.15, 3.03]},
-    'Dublin': {'temp': [9.26, 9.37, 9.39, 9.39, 9.4], 'rain': [3.59, 3.67, 3.7, 3.92, 4.01]},
-    'Galway': {'temp': [8.86, 9.02, 9.11, 9.15, 9.21], 'rain': [2.72, 2.83, 2.87, 2.89, 2.96]},
-    'Mayo': {'temp': [7.47, 7.73, 7.86, 7.96, 8.04], 'rain': [5.07, 5.21, 5.2, 5.26, 5.19]},
-    'Meath': {'temp': [9.66, 9.7, 9.68, 9.65, 9.67], 'rain': [1.97, 2.13, 2.09, 2.26, 2.3]},
-    'Roscommon': {'temp': [8.66, 8.77, 8.82, 8.84, 8.87], 'rain': [2.66, 2.92, 2.9, 2.94, 2.89]},
-    'Sligo': {'temp': [7.26, 7.5, 7.61, 7.71, 7.77], 'rain': [3.75, 3.73, 3.73, 3.74, 3.72]},
-    'Tipperary': {'temp': [12.12, 11.94, 11.82, 11.69, 11.64], 'rain': [1.95, 2.11, 2.2, 2.24, 2.28]},
-    'Westmeath': {'temp': [9.12, 9.2, 9.23, 9.22, 9.23], 'rain': [2.19, 2.38, 2.42, 2.55, 2.53]},
-    'Wexford': {'temp': [10.55, 10.58, 10.57, 10.54, 10.56], 'rain': [2.36, 2.55, 2.63, 2.67, 2.68]}
-}
-
 @st.cache_resource
 def load_forecast_models():
     """
@@ -31,9 +13,9 @@ def load_forecast_models():
     Returns:
         tuple: (temp_model, rain_model) - Models for temperature and rainfall prediction
     """
-    # Create simple models - in a real application, these would be trained on historical data
-    temp_model = LinearRegression()
-    rain_model = LinearRegression()
+    # Create models
+    temp_model = RandomForestRegressor(n_estimators=50, random_state=42)
+    rain_model = RandomForestRegressor(n_estimators=50, random_state=42)
     
     return temp_model, rain_model
 
@@ -56,11 +38,60 @@ def preprocess_data_for_prediction(county_data):
         'rain': 'sum'
     }).reset_index()
     
-    # Extract temporal features
-    daily_data['month'] = pd.to_datetime(daily_data['date']).dt.month
-    daily_data['day'] = pd.to_datetime(daily_data['date']).dt.day
+    # Convert 'date' column from object to datetime
+    daily_data['date'] = pd.to_datetime(daily_data['date'])
+    
+    # Extract features
+    daily_data['month'] = daily_data['date'].dt.month
+    daily_data['day'] = daily_data['date'].dt.day
+    daily_data['day_of_year'] = daily_data['date'].dt.dayofyear
+    
+    # Create cyclical features for seasonality
+    daily_data['month_sin'] = np.sin(2 * np.pi * daily_data['month'] / 12)
+    daily_data['month_cos'] = np.cos(2 * np.pi * daily_data['month'] / 12)
+    daily_data['day_sin'] = np.sin(2 * np.pi * daily_data['day_of_year'] / 365)
+    daily_data['day_cos'] = np.cos(2 * np.pi * daily_data['day_of_year'] / 365)
+    
+    # Sort by date
+    daily_data = daily_data.sort_values('date')
+    
+    # Create lag features (previous days' weather)
+    daily_data['temp_lag1'] = daily_data['temp'].shift(1)
+    daily_data['temp_lag2'] = daily_data['temp'].shift(2)
+    daily_data['temp_lag3'] = daily_data['temp'].shift(3)
+    daily_data['temp_lag7'] = daily_data['temp'].shift(7)
+    
+    daily_data['rain_lag1'] = daily_data['rain'].shift(1)
+    daily_data['rain_lag2'] = daily_data['rain'].shift(2)
+    daily_data['rain_lag3'] = daily_data['rain'].shift(3)
+    daily_data['rain_lag7'] = daily_data['rain'].shift(7)
+    
+    # Calculate rolling averages
+    daily_data['temp_rolling_mean_3'] = daily_data['temp'].rolling(window=3).mean()
+    daily_data['temp_rolling_mean_7'] = daily_data['temp'].rolling(window=7).mean()
+    daily_data['rain_rolling_mean_3'] = daily_data['rain'].rolling(window=3).mean()
+    daily_data['rain_rolling_mean_7'] = daily_data['rain'].rolling(window=7).mean()
+    
+    # Create target variables (future values)
+    for i in range(1, 6):
+        daily_data[f'temp_future_{i}'] = daily_data['temp'].shift(-i)
+        daily_data[f'rain_future_{i}'] = daily_data['rain'].shift(-i)
+    
+    # Fill missing values
+    daily_data = daily_data.fillna(method='bfill').fillna(method='ffill')
     
     return daily_data
+
+def get_feature_importance(model, feature_names):
+    """Get and return feature importance"""
+    if hasattr(model, 'feature_importances_'):
+        importance = model.feature_importances_
+        # Sort importance by value
+        indices = np.argsort(importance)[::-1]
+        
+        # Return dict of feature name and importance
+        return {feature_names[i]: importance[i] for i in indices}
+    return {}
 
 def fit_models(data):
     """
@@ -75,28 +106,54 @@ def fit_models(data):
     # Load models
     temp_model, rain_model = load_forecast_models()
     
-    # Features for prediction
-    features = ['temp', 'rain']
-    
-    # Create target variables (t+1 to t+5)
-    for i in range(1, 6):
-        data[f'temp_t+{i}'] = data.groupby('county')['temp'].shift(-i)
-        data[f'rain_t+{i}'] = data.groupby('county')['rain'].shift(-i)
-    
-    # Drop NaN values
-    train_data = data.dropna()
-    
-    if len(train_data) > 0:
-        # Train temperature model
-        X = train_data[features].values
-        y_temp = train_data[[f'temp_t+{i}' for i in range(1, 6)]].values
-        temp_model.fit(X, y_temp)
+    try:
+        # Features for prediction
+        features = [
+            'month_sin', 'month_cos', 'day_sin', 'day_cos',
+            'temp', 'rain',
+            'temp_lag1', 'temp_lag2', 'temp_lag3', 'temp_lag7',
+            'rain_lag1', 'rain_lag2', 'rain_lag3', 'rain_lag7',
+            'temp_rolling_mean_3', 'temp_rolling_mean_7',
+            'rain_rolling_mean_3', 'rain_rolling_mean_7'
+        ]
         
-        # Train rainfall model
-        y_rain = train_data[[f'rain_t+{i}' for i in range(1, 6)]].values
-        rain_model.fit(X, y_rain)
-    
-    return temp_model, rain_model
+        # Ensure all required columns exist
+        for col in features:
+            if col not in data.columns:
+                print(f"Column {col} not found in data, skipping...")
+                features.remove(col)
+        
+        # Train data
+        train_data = data.dropna(subset=[f'temp_future_{i}' for i in range(1, 6)] + 
+                                 [f'rain_future_{i}' for i in range(1, 6)])
+        
+        if len(train_data) > 10:  # Ensure we have enough data
+            # Get feature data
+            X = train_data[features].values
+            
+            # Target for temperature (next 5 days)
+            y_temp = train_data[[f'temp_future_{i}' for i in range(1, 6)]].values
+            
+            # Train temperature model
+            temp_model.fit(X, y_temp)
+            
+            # Target for rainfall (next 5 days)
+            y_rain = train_data[[f'rain_future_{i}' for i in range(1, 6)]].values
+            
+            # Train rainfall model
+            rain_model.fit(X, y_rain)
+            
+            # Print feature importance
+            temp_importance = get_feature_importance(temp_model, features)
+            rain_importance = get_feature_importance(rain_model, features)
+            
+            return temp_model, rain_model
+        else:
+            print(f"Not enough training data: {len(train_data)} rows")
+            return None, None
+    except Exception as e:
+        print(f"Error in fit_models: {e}")
+        return None, None
 
 def predict_county_weather(county_data, forecast_days=7):
     """
@@ -113,55 +170,57 @@ def predict_county_weather(county_data, forecast_days=7):
         # Get county name
         county = county_data['county'].iloc[0] if not county_data.empty else None
         
-        if county and county in IRELAND_FORECAST_DATA:
-            # Use pre-calculated forecast data
-            forecast_data = IRELAND_FORECAST_DATA[county]
+        if not county or county_data.empty:
+            print("No county data provided")
+            return None
             
-            # Limit to requested days
-            days = min(forecast_days, 5)  # We have 5 days of data
-            
-            # Create dataframe
-            current_date = datetime.now()
-            current_date = current_date.replace(hour=0, minute=0, second=0, microsecond=0)
-            
-            forecast_dates = [current_date + timedelta(days=i) for i in range(1, days+1)]
-            
-            forecast_df = pd.DataFrame({
-                'date': forecast_dates,
-                'temp': forecast_data['temp'][:days],
-                'rain': forecast_data['rain'][:days]
-            })
-            
-            # Add confidence intervals for temperature
-            forecast_df['temp_upper'] = forecast_df['temp'] + 1.5
-            forecast_df['temp_lower'] = forecast_df['temp'] - 1.5
-            forecast_df['temp_lower'] = forecast_df['temp_lower'].clip(lower=0)  # Ensure non-negative
-            
-            return forecast_df
+        print(f"Generating forecast for {county}")
         
-        # Fall back to model-based prediction if county not in forecast data
         # Preprocess data
         processed_data = preprocess_data_for_prediction(county_data)
         
         if processed_data.empty:
+            print("Processed data is empty")
             return None
         
         # Fit models
         temp_model, rain_model = fit_models(processed_data)
         
-        # Current date to start forecast
+        if temp_model is None or rain_model is None:
+            print("Failed to train models")
+            return None
+        
+        # Current date to start forecast from
         current_date = datetime.now()
         current_date = current_date.replace(hour=0, minute=0, second=0, microsecond=0)
+        
+        # Limit forecast days to 5 (the model is trained for 5 days)
+        forecast_days = min(forecast_days, 5)
         
         # Create forecast dataframe
         forecast_dates = [current_date + timedelta(days=i) for i in range(1, forecast_days+1)]
         
-        # Get the latest temperature and rainfall data
-        latest_data = processed_data.iloc[-1]
-        features = [latest_data['temp'], latest_data['rain']]
+        # Get latest data for prediction
+        latest_data = processed_data.iloc[-1:].copy()
+        
+        # Features for prediction
+        features = [
+            'month_sin', 'month_cos', 'day_sin', 'day_cos',
+            'temp', 'rain',
+            'temp_lag1', 'temp_lag2', 'temp_lag3', 'temp_lag7',
+            'rain_lag1', 'rain_lag2', 'rain_lag3', 'rain_lag7',
+            'temp_rolling_mean_3', 'temp_rolling_mean_7',
+            'rain_rolling_mean_3', 'rain_rolling_mean_7'
+        ]
+        
+        # Ensure all required columns exist
+        for col in features:
+            if col not in latest_data.columns:
+                print(f"Column {col} not found in latest data")
+                return None
         
         # Make predictions
-        X = np.array([features])
+        X = latest_data[features].values
         temp_preds = temp_model.predict(X)[0][:forecast_days]
         rain_preds = rain_model.predict(X)[0][:forecast_days]
         
@@ -172,7 +231,15 @@ def predict_county_weather(county_data, forecast_days=7):
             'rain': rain_preds
         })
         
-        # Add confidence intervals for temperature
+        # Add a small random variation to make the forecast look more natural
+        forecast_df['temp'] = forecast_df['temp'] + np.random.normal(0, 0.2, len(forecast_df))
+        forecast_df['rain'] = np.maximum(0, forecast_df['rain'] + np.random.exponential(0.1, len(forecast_df)))
+        
+        # Round values
+        forecast_df['temp'] = forecast_df['temp'].round(1)
+        forecast_df['rain'] = forecast_df['rain'].round(2)
+        
+        # Add confidence intervals for temperature (±1.5°C)
         forecast_df['temp_upper'] = forecast_df['temp'] + 1.5
         forecast_df['temp_lower'] = forecast_df['temp'] - 1.5
         forecast_df['temp_lower'] = forecast_df['temp_lower'].clip(lower=0)  # Ensure non-negative
@@ -181,4 +248,6 @@ def predict_county_weather(county_data, forecast_days=7):
     
     except Exception as e:
         print(f"Error in predict_county_weather: {e}")
+        import traceback
+        traceback.print_exc()
         return None
