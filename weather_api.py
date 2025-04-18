@@ -5,7 +5,7 @@ import streamlit as st
 
 # OpenWeatherMap API key
 # Get from environment variable
-API_KEY = os.getenv("OPENWEATHER_API_KEY", "")
+API_KEY = os.getenv("b76ab9b14abba7b3a9a6f86d5c021414", "")
 
 # Base URLs
 BASE_URL = "https://api.openweathermap.org/data/2.5/weather"
