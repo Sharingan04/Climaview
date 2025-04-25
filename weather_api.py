@@ -4,10 +4,8 @@ from datetime import datetime
 import streamlit as st
 
 # OpenWeatherMap API key
-# Get from environment variable
-API_KEY = os.getenv("b76ab9b14abba7b3a9a6f86d5c021414", "")
-
-# Base URLs
+# Get from environment variable or use a default key
+API_KEY = os.getenv("OPENWEATHER_API_KEY", "b76ab9b14abba7b3a9a6f86d5c021414")
 BASE_URL = "https://api.openweathermap.org/data/2.5/weather"
 GEO_URL = "https://api.openweathermap.org/geo/1.0/direct"
 
@@ -22,16 +20,6 @@ def get_current_weather(city):
     Returns:
         dict: Weather data from OpenWeatherMap API
     """
-    # Check if API key is available
-    if not API_KEY:
-        return {"cod": 401, "message": "API key is missing. Please set the OPENWEATHER_API_KEY environment variable."}
-    
-    # Prepare city name properly (trim whitespace, etc.)
-    city = city.strip()
-    
-    if not city:
-        return {"cod": 400, "message": "City name cannot be empty"}
-    
     params = {
         'q': city,
         'appid': API_KEY,
@@ -40,20 +28,12 @@ def get_current_weather(city):
     
     try:
         response = requests.get(BASE_URL, params=params)
-        
-        # Check if the request was successful
-        if response.status_code == 200:
-            data = response.json()
-            return data
-        else:
-            # Log the error response for debugging
-            error_data = response.json()
-            return {"cod": response.status_code, "message": error_data.get('message', 'Unknown error')}
-            
+        print(response)
+        data = response.json()
+        return data
     except requests.exceptions.RequestException as e:
-        return {"cod": 500, "message": f"Network error: {str(e)}"}
-    except Exception as e:
-        return {"cod": 500, "message": f"Unexpected error: {str(e)}"}
+        st.error(f"Error fetching weather data: {e}")
+        return None
 
 @st.cache_data(ttl=3600)  # Cache for 1 hour
 def get_city_coordinates(city):
@@ -65,10 +45,6 @@ def get_city_coordinates(city):
     Returns:
         tuple: (latitude, longitude) or (None, None) if not found
     """
-    if not API_KEY:
-        st.error("API key is missing. Please set the OPENWEATHER_API_KEY environment variable.")
-        return None, None
-    
     params = {
         'q': city,
         'appid': API_KEY,
@@ -96,9 +72,6 @@ def get_city_suggestions(query):
     Returns:
         list: List of city name suggestions
     """
-    if not API_KEY:
-        return []
-        
     if not query or len(query) < 3:
         return []
     
@@ -124,5 +97,6 @@ def get_city_suggestions(query):
                     suggestions.append(city_name)
         
         return suggestions
-    except Exception as e:
+    except (requests.exceptions.RequestException, TypeError, ValueError) as e:
+        st.error(f"Error fetching city suggestions: {e}")
         return []

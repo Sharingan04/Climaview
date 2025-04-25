@@ -18,7 +18,7 @@ def display_ireland_forecast_page():
     """
     Display the Ireland County Forecast page with forecasts only.
     """
-    st.header("Ireland County Weather Forecast")
+    st.header("Ireland Countywise Weather Forecast")
     
     # Load Irish county weather data
     with st.spinner("Loading Irish weather data..."):
@@ -36,7 +36,6 @@ def display_ireland_forecast_page():
     
     st.markdown("""
     Select a county below to view its 5-day weather forecast. 
-    The forecasts are based on historical weather patterns and current conditions.
     """)
     
     # Get the forecast date range
@@ -226,13 +225,3 @@ def display_ireland_forecast_page():
                 
             else:
                 st.error("Failed to generate forecast. Please try again.")
-    
-    # Information about the data source
-    st.markdown("---")
-    st.markdown("""
-    #### About the Forecast
-    The weather forecast is based on historical weather patterns and current conditions for Irish counties.
-    The data includes forecast information for temperature, rainfall, and humidity for the next 5 days.
-    
-    This forecast uses machine learning models trained on historical Irish weather data to provide accurate predictions.
-    """)

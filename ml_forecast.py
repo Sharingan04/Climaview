@@ -1,10 +1,8 @@
 import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
-from sklearn.linear_model import LinearRegression
 from sklearn.ensemble import RandomForestRegressor
 import streamlit as st
-
 @st.cache_resource
 def load_forecast_models():
     """

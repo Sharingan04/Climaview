@@ -6,6 +6,7 @@ from weather_api import get_current_weather, get_city_suggestions
 from visualization import create_weather_dashboard
 from utils import format_weather_data
 from ireland_forecast import display_ireland_forecast_page
+import bicycle_analysis
 
 # Page configuration
 st.set_page_config(
@@ -15,14 +16,13 @@ st.set_page_config(
 )
 
 # Title 
-st.title("☁️ WeatherWise Dashboard")
+st.title("☁️The Weather Dashboard")
 
 # Create tabs for different features
-tab1, tab2 = st.tabs(["Global Weather", "Ireland County Forecast"])
+tab1, tab2, tab3= st.tabs(["Global Weather", "Ireland County Forecast", "Dublin Climate vs Bicycle Analysis"])
 
 with tab1:
     st.markdown("""
-    This tab allows you to check current weather data for cities around the world.
     Enter a city name below to get started!
     """)
 
@@ -133,6 +133,8 @@ with tab1:
 with tab2:
     display_ireland_forecast_page()
 
+with tab3:
+    bicycle_analysis.render_bicycle_analysis_tab()
 # Footer
 st.markdown("---")
-st.markdown("Built with Streamlit • Data from OpenWeatherMap API")
+
